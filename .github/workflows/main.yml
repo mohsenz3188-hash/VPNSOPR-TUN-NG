@@ -1,3 +1,4 @@
+
 name: Build VPNSOPR APK
 
 on:
@@ -42,14 +43,9 @@ jobs:
           set -euo pipefail
 
           SDK="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
+          SM="$(find "$SDK/cmdline-tools" -type f -name sdkmanager | sort -V | tail -n 1)"
 
-          SM="$(find "$SDK/cmdline-tools" \
-            -type f -name sdkmanager | sort -V | tail -n 1)"
-
-          if [[ -z "$SM" ]]; then
-            echo "sdkmanager not found"
-            exit 1
-          fi
+          test -n "$SM"
 
           echo "ANDROID_HOME=$SDK" >> "$GITHUB_ENV"
           echo "ANDROID_SDK_ROOT=$SDK" >> "$GITHUB_ENV"
@@ -92,8 +88,74 @@ jobs:
       - name: Configure Android
         run: python3 scripts/patch_android.py
 
-      - name: Fix dependency version
+      - name: Add JitPack repository
         shell: bash
+        run: |
+          set -euo pipefail
+
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          candidates = [
+              Path("android/settings.gradle.kts"),
+              Path("android/settings.gradle")
+          ]
+
+          settings = next((p for p in candidates if p.exists()), None)
+
+          if settings is None:
+              raise SystemExit("Android settings.gradle not found")
+
+          content = settings.read_text(encoding="utf-8")
+
+          if "https://jitpack.io" in content:
+              print("JitPack already configured")
+          else:
+              start = content.find("dependencyResolutionManagement")
+
+              if start < 0:
+                  raise SystemExit(
+                      "dependencyResolutionManagement block not found"
+                  )
+
+              match = re.search(
+                  r"(?m)^(\s*)repositories\s*\{",
+                  content[start:]
+              )
+
+              if not match:
+                  raise SystemExit(
+                      "Dependency repositories block not found"
+                  )
+
+              position = start + match.end()
+              indent = match.group(1) + "    "
+
+              if settings.name.endswith(".kts"):
+                  repository = (
+                      '\n' + indent +
+                      'maven { url = uri("https://jitpack.io") }'
+                  )
+              else:
+                  repository = (
+                      '\n' + indent +
+                      "maven { url 'https://jitpack.io' }"
+                  )
+
+              content = (
+                  content[:position] +
+                  repository +
+                  content[position:]
+              )
+
+              settings.write_text(content, encoding="utf-8")
+              print("JitPack added to", settings)
+
+          print(settings.read_text(encoding="utf-8"))
+          PY
+
+      - name: Fix dependency version
         run: |
           set -euo pipefail
           sed -i 's/file_picker: \^10\.3\.3/file_picker: ^13.3.0/' pubspec.yaml
@@ -151,7 +213,7 @@ jobs:
 
               if "FilePicker.platform." in source:
                   raise SystemExit(
-                      f"Old FilePicker API remains in {path}"
+                      f"Old FilePicker API remains: {path}"
                   )
 
               path.write_text(source, encoding="utf-8")
