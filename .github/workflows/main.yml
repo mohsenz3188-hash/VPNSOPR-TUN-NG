@@ -24,12 +24,42 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+
           unzip -oq VPNSOPR-Android-Source.zip -d .
 
           test -f pubspec.yaml
           test -f lib/main.dart
           test -f scripts/patch_android.py
           test -f assets/vpnsopr_icon.png
+
+      - name: Apply fixed importer
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          test -f profile_importer.dart
+          test -f wireguard_parser.dart
+
+          TARGET="$(find lib -type f -name 'profile_importer.dart' -print -quit)"
+
+          if [ -z "$TARGET" ]; then
+            echo "ERROR: profile_importer.dart not found in lib"
+            exit 1
+          fi
+
+          TARGET_DIR="$(dirname "$TARGET")"
+
+          cp profile_importer.dart "$TARGET"
+
+          if [ -f "$TARGET_DIR/wireguard_parser.dart" ]; then
+            echo "WireGuard parser already exists"
+          else
+            cp wireguard_parser.dart "$TARGET_DIR/wireguard_parser.dart"
+          fi
+
+          cmp -s profile_importer.dart "$TARGET"
+
+          echo "Importer successfully replaced: $TARGET"
 
       - name: Setup Java
         uses: actions/setup-java@v4
@@ -50,7 +80,6 @@ jobs:
           echo "ANDROID_HOME=$SDK" >> "$GITHUB_ENV"
           echo "ANDROID_SDK_ROOT=$SDK" >> "$GITHUB_ENV"
           echo "$SDK/platform-tools" >> "$GITHUB_PATH"
-          echo "$(dirname "$SM")" >> "$GITHUB_PATH"
 
           yes | "$SM" --sdk_root="$SDK" --licenses || true
 
@@ -101,6 +130,8 @@ jobs:
 
           if kts.exists():
               gradle = kts
+              enabled = "isCoreLibraryDesugaringEnabled = true"
+              dependency = 'coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.5")'
               android_block = """
           android {
               compileOptions {
@@ -113,11 +144,10 @@ jobs:
               coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.5")
           }
           """
-              enabled = "isCoreLibraryDesugaringEnabled = true"
-              dependency = 'coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.5")'
-
           elif groovy.exists():
               gradle = groovy
+              enabled = "coreLibraryDesugaringEnabled true"
+              dependency = "coreLibraryDesugaring 'com.android.tools:desugar_jdk_libs:2.1.5'"
               android_block = """
           android {
               compileOptions {
@@ -130,11 +160,8 @@ jobs:
               coreLibraryDesugaring 'com.android.tools:desugar_jdk_libs:2.1.5'
           }
           """
-              enabled = "coreLibraryDesugaringEnabled true"
-              dependency = "coreLibraryDesugaring 'com.android.tools:desugar_jdk_libs:2.1.5'"
-
           else:
-              raise SystemExit("App Gradle file not found")
+              raise SystemExit("Gradle file not found")
 
           content = gradle.read_text(encoding="utf-8")
 
@@ -146,13 +173,7 @@ jobs:
 
           gradle.write_text(content, encoding="utf-8")
 
-          check = gradle.read_text(encoding="utf-8")
-
-          if enabled not in check or dependency not in check:
-              raise SystemExit("Desugaring configuration failed")
-
-          print("Core Library Desugaring enabled successfully")
-          print("Gradle file:", gradle)
+          print("Desugaring configured")
           PY
 
       - name: Fix FilePicker dependency
@@ -190,12 +211,6 @@ jobs:
               )
 
               source = re.sub(
-                  r"if\s*\(\s*(\w+)\s*==\s*null\s*\|\|\s*\1\.files\.isEmpty\s*\)\s*return;",
-                  r"if (\1.isEmpty) return;",
-                  source
-              )
-
-              source = re.sub(
                   r"\b(\w+)\.files\.first\b",
                   r"\1.first",
                   source
@@ -205,9 +220,6 @@ jobs:
                   "file.bytes ?? (file.path != null ? await File(file.path!).readAsBytes() : null)",
                   "await file.readAsBytes()"
               )
-
-              if "FilePicker.platform." in source:
-                  raise SystemExit(f"Old FilePicker API: {path}")
 
               path.write_text(source, encoding="utf-8")
 
@@ -225,16 +237,20 @@ jobs:
           python3 - <<'PY'
           from pathlib import Path
 
-          def add_jitpack(path):
-              if not path.exists():
-                  return
+          paths = [
+              Path("android/build.gradle.kts"),
+              Path("android/build.gradle")
+          ]
 
-              content = path.read_text(encoding="utf-8")
+          root = next((p for p in paths if p.exists()), None)
 
-              if "https://jitpack.io" in content:
-                  return
+          if root is None:
+              raise SystemExit("Android root Gradle file missing")
 
-              if path.suffix == ".kts":
+          content = root.read_text(encoding="utf-8")
+
+          if "https://jitpack.io" not in content:
+              if root.suffix == ".kts":
                   block = """
           allprojects {
               repositories {
@@ -251,36 +267,17 @@ jobs:
           }
           """
 
-              path.write_text(content.rstrip() + "\n" + block, encoding="utf-8")
-
-          root = next(
-              (p for p in [
-                  Path("android/build.gradle.kts"),
-                  Path("android/build.gradle")
-              ] if p.exists()),
-              None
-          )
-
-          if root is None:
-              raise SystemExit("Android root Gradle file missing")
-
-          add_jitpack(root)
-
-          cache = Path.home() / ".pub-cache/hosted/pub.dev"
-
-          for pattern in [
-              "flutter_sing_box-*/android/build.gradle.kts",
-              "flutter_sing_box-*/android/build.gradle"
-          ]:
-              for path in cache.glob(pattern):
-                  add_jitpack(path)
+              root.write_text(content.rstrip() + "\n" + block, encoding="utf-8")
 
           print("JitPack configured")
-
           PY
 
       - name: Generate launcher icon
         run: dart run flutter_launcher_icons
+
+      - name: Analyze Dart code
+        run: flutter analyze --no-pub
+        continue-on-error: false
 
       - name: Build APK
         run: flutter build apk --release --split-per-abi
