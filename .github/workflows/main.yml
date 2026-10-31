@@ -1,11 +1,17 @@
-
 name: Build VPNSOPR APK
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - main
 
 permissions:
   contents: read
+
+concurrency:
+  group: vpnsopr-android-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   build-android:
@@ -17,59 +23,78 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Extract VPNSOPR source archive
-        shell: bash
+      - name: Extract and validate source
         run: |
-          if [[ -f "VPNSOPR-Android-Source.zip" ]]; then
-            unzip -oq "VPNSOPR-Android-Source.zip" -d .
-          fi
+          set -euo pipefail
+          unzip -oq VPNSOPR-Android-Source.zip -d .
 
-          for required_file in pubspec.yaml lib/main.dart assets/vpnsopr_icon.png scripts/patch_android.py; do
-            if [[ ! -f "$required_file" ]]; then
-              echo "::error::Missing $required_file. Upload VPNSOPR-Android-Source.zip to repository root."
+          for f in pubspec.yaml lib/main.dart assets/vpnsopr_icon.png scripts/patch_android.py; do
+            test -f "$f" || {
+              echo "Missing file: $f"
               exit 1
-            fi
+            }
           done
 
-      - name: Set up Java 17
+      - name: Setup Java
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '17'
 
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
+      - name: Configure Android SDK
+        shell: bash
+        run: |
+          set -euo pipefail
 
-      - name: Install Android SDK 37
-        run: sdkmanager "platforms;android-37"
+          SDK="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
+          SM="$SDK/cmdline-tools/latest/bin/sdkmanager"
 
-      - name: Set up Flutter
+          test -x "$SM"
+
+          echo "ANDROID_HOME=$SDK" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$SDK" >> "$GITHUB_ENV"
+          echo "$SDK/platform-tools" >> "$GITHUB_PATH"
+          echo "$SDK/cmdline-tools/latest/bin" >> "$GITHUB_PATH"
+
+          "$SM" --version
+
+          yes | "$SM" --sdk_root="$SDK" --licenses >/dev/null || true
+
+          "$SM" --sdk_root="$SDK" --install \
+            "platforms;android-37" \
+            "platform-tools"
+
+      - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with:
           flutter-version: '3.44.0'
           channel: stable
           cache: true
 
-      - name: Generate Android host project if missing
-        shell: bash
+      - name: Check toolchain
+        run: |
+          flutter --version
+          flutter doctor -v
+
+      - name: Generate Android project
         run: |
           if [[ ! -f android/app/build.gradle.kts && ! -f android/app/build.gradle ]]; then
             flutter create --platforms=android --org com.vpnsopr --project-name vpnsopr --no-pub .
           fi
 
-      - name: Configure Android project
+      - name: Patch Android
         run: python3 scripts/patch_android.py
 
-      - name: Resolve Flutter dependencies
+      - name: Install dependencies
         run: flutter pub get
 
-      - name: Generate app launcher icons
+      - name: Generate app icon
         run: dart run flutter_launcher_icons
 
-      - name: Build release APKs
+      - name: Build APK
         run: flutter build apk --release --split-per-abi
 
-      - name: Upload APK artifacts
+      - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: VPNSOPR-Android-APKs
