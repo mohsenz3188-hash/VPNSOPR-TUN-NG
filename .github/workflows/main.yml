@@ -88,11 +88,78 @@ jobs:
       - name: Configure Android
         run: python3 scripts/patch_android.py
 
+      - name: Enable Core Library Desugaring
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          python3 - <<'PY'
+          from pathlib import Path
+
+          kts = Path("android/app/build.gradle.kts")
+          groovy = Path("android/app/build.gradle")
+
+          if kts.exists():
+              gradle = kts
+              android_block = """
+          android {
+              compileOptions {
+                  isCoreLibraryDesugaringEnabled = true
+              }
+          }
+          """
+              dependency_block = """
+          dependencies {
+              coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.5")
+          }
+          """
+              enabled = "isCoreLibraryDesugaringEnabled = true"
+              dependency = 'coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.5")'
+
+          elif groovy.exists():
+              gradle = groovy
+              android_block = """
+          android {
+              compileOptions {
+                  coreLibraryDesugaringEnabled true
+              }
+          }
+          """
+              dependency_block = """
+          dependencies {
+              coreLibraryDesugaring 'com.android.tools:desugar_jdk_libs:2.1.5'
+          }
+          """
+              enabled = "coreLibraryDesugaringEnabled true"
+              dependency = "coreLibraryDesugaring 'com.android.tools:desugar_jdk_libs:2.1.5'"
+
+          else:
+              raise SystemExit("App Gradle file not found")
+
+          content = gradle.read_text(encoding="utf-8")
+
+          if enabled not in content:
+              content += "\n" + android_block
+
+          if dependency not in content:
+              content += "\n" + dependency_block
+
+          gradle.write_text(content, encoding="utf-8")
+
+          check = gradle.read_text(encoding="utf-8")
+
+          if enabled not in check or dependency not in check:
+              raise SystemExit("Desugaring configuration failed")
+
+          print("Core Library Desugaring enabled successfully")
+          print("Gradle file:", gradle)
+          PY
+
       - name: Fix FilePicker dependency
+        shell: bash
         run: |
           set -euo pipefail
           sed -i 's/file_picker: \^10\.3\.3/file_picker: ^13.3.0/' pubspec.yaml
-          grep 'file_picker:' pubspec.yaml
 
       - name: Migrate FilePicker API
         shell: bash
@@ -103,9 +170,7 @@ jobs:
           from pathlib import Path
           import re
 
-          root = Path("lib")
-
-          for path in root.rglob("*.dart"):
+          for path in Path("lib").rglob("*.dart"):
               source = path.read_text(encoding="utf-8")
 
               source = source.replace(
@@ -162,15 +227,14 @@ jobs:
 
           def add_jitpack(path):
               if not path.exists():
-                  return False
+                  return
 
               content = path.read_text(encoding="utf-8")
 
               if "https://jitpack.io" in content:
-                  print("Already configured:", path)
-                  return True
+                  return
 
-              if path.name.endswith(".kts"):
+              if path.suffix == ".kts":
                   block = """
           allprojects {
               repositories {
@@ -187,13 +251,7 @@ jobs:
           }
           """
 
-              path.write_text(
-                  content.rstrip() + "\n\n" + block + "\n",
-                  encoding="utf-8"
-              )
-
-              print("JitPack added:", path)
-              return True
+              path.write_text(content.rstrip() + "\n" + block, encoding="utf-8")
 
           root = next(
               (p for p in [
@@ -204,22 +262,21 @@ jobs:
           )
 
           if root is None:
-              raise SystemExit("Android root build.gradle not found")
+              raise SystemExit("Android root Gradle file missing")
 
           add_jitpack(root)
 
           cache = Path.home() / ".pub-cache/hosted/pub.dev"
 
-          plugin_files = list(
-              cache.glob("flutter_sing_box-*/android/build.gradle.kts")
-          ) + list(
-              cache.glob("flutter_sing_box-*/android/build.gradle")
-          )
+          for pattern in [
+              "flutter_sing_box-*/android/build.gradle.kts",
+              "flutter_sing_box-*/android/build.gradle"
+          ]:
+              for path in cache.glob(pattern):
+                  add_jitpack(path)
 
-          for plugin_file in plugin_files:
-              add_jitpack(plugin_file)
+          print("JitPack configured")
 
-          print("JitPack repository configuration completed")
           PY
 
       - name: Generate launcher icon
