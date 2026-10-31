@@ -37,13 +37,12 @@ jobs:
           java-version: '17'
 
       - name: Setup Android SDK
+        shell: bash
         run: |
           set -euo pipefail
 
           SDK="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
-
-          SM="$(find "$SDK/cmdline-tools" \
-            -type f -name sdkmanager | sort -V | tail -n 1)"
+          SM="$(find "$SDK/cmdline-tools" -type f -name sdkmanager | sort -V | tail -n 1)"
 
           test -n "$SM"
 
@@ -60,11 +59,7 @@ jobs:
             "platform-tools"
 
           mkdir -p "$SDK/platforms"
-
-          if [ ! -f "$SDK/platforms/android-37/android.jar" ]; then
-            ln -sfn "$SDK/platforms/android-37.0" \
-              "$SDK/platforms/android-37"
-          fi
+          ln -sfn android-37.0 "$SDK/platforms/android-37"
 
           test -f "$SDK/platforms/android-37/android.jar"
 
@@ -91,17 +86,89 @@ jobs:
       - name: Configure Android
         run: python3 scripts/patch_android.py
 
-      - name: Fix dependency conflict
+      - name: Fix dependency version
         run: |
           set -euo pipefail
           sed -i 's/file_picker: \^10\.3\.3/file_picker: ^13.3.0/' pubspec.yaml
           grep 'file_picker:' pubspec.yaml
+
+      - name: Migrate FilePicker API
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          root = Path("lib")
+          if not root.exists():
+              raise SystemExit("lib directory not found")
+
+          changed = []
+
+          for path in root.rglob("*.dart"):
+              source = path.read_text(encoding="utf-8")
+              original = source
+
+              source = source.replace(
+                  "FilePicker.platform.pickFiles(",
+                  "FilePicker.pickFiles("
+              )
+
+              source = source.replace(
+                  "FilePicker.platform.saveFile(",
+                  "FilePicker.saveFile("
+              )
+
+              source = re.sub(
+                  r"(?m)^\s*withData:\s*true,\s*\n",
+                  "",
+                  source
+              )
+
+              source = re.sub(
+                  r"if\s*\(\s*(\w+)\s*==\s*null\s*\|\|\s*\1\.files\.isEmpty\s*\)\s*return;",
+                  r"if (\1.isEmpty) return;",
+                  source
+              )
+
+              source = re.sub(
+                  r"\b(\w+)\.files\.first\b",
+                  r"\1.first",
+                  source
+              )
+
+              source = source.replace(
+                  "file.bytes ?? (file.path != null ? await File(file.path!).readAsBytes() : null)",
+                  "await file.readAsBytes()"
+              )
+
+              if "FilePicker.platform." in source:
+                  raise SystemExit(f"Old FilePicker API remains in {path}")
+
+              if "withData: true" in source and "FilePicker." in source:
+                  raise SystemExit(f"Old withData parameter remains in {path}")
+
+              if source != original:
+                  path.write_text(source, encoding="utf-8")
+                  changed.append(str(path))
+
+          print("Migrated FilePicker files:")
+          for path in changed:
+              print(" -", path)
+
+          print("FilePicker migration complete.")
+          PY
 
       - name: Install dependencies
         run: flutter pub get
 
       - name: Generate launcher icon
         run: dart run flutter_launcher_icons
+
+      - name: Analyze Dart code
+        run: flutter analyze --no-pub
 
       - name: Build APK
         run: flutter build apk --release --split-per-abi
