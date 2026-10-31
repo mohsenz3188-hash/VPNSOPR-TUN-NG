@@ -21,10 +21,8 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Extract source
-        shell: bash
         run: |
           set -euo pipefail
-
           unzip -oq VPNSOPR-Android-Source.zip -d .
 
           test -f pubspec.yaml
@@ -32,34 +30,27 @@ jobs:
           test -f scripts/patch_android.py
           test -f assets/vpnsopr_icon.png
 
-      - name: Setup Java 17
+      - name: Setup Java
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '17'
 
-      - name: Install Android SDK 37
-        shell: bash
+      - name: Setup Android SDK
         run: |
           set -euo pipefail
 
           SDK="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
 
           SM="$(find "$SDK/cmdline-tools" \
-            -type f -name sdkmanager 2>/dev/null \
-            | sort -V | tail -n 1)"
+            -type f -name sdkmanager | sort -V | tail -n 1)"
 
-          if [[ -z "$SM" ]]; then
-            echo "ERROR: sdkmanager not found"
-            exit 1
-          fi
+          test -n "$SM"
 
           echo "ANDROID_HOME=$SDK" >> "$GITHUB_ENV"
           echo "ANDROID_SDK_ROOT=$SDK" >> "$GITHUB_ENV"
           echo "$SDK/platform-tools" >> "$GITHUB_PATH"
           echo "$(dirname "$SM")" >> "$GITHUB_PATH"
-
-          "$SM" --version
 
           yes | "$SM" --sdk_root="$SDK" --licenses || true
 
@@ -70,9 +61,8 @@ jobs:
 
           mkdir -p "$SDK/platforms"
 
-          if [[ ! -f "$SDK/platforms/android-37/android.jar" ]]; then
-            rm -rf "$SDK/platforms/android-37"
-            ln -s "$SDK/platforms/android-37.0" \
+          if [ ! -f "$SDK/platforms/android-37/android.jar" ]; then
+            ln -sfn "$SDK/platforms/android-37.0" \
               "$SDK/platforms/android-37"
           fi
 
@@ -86,14 +76,11 @@ jobs:
           cache: true
 
       - name: Check Flutter
-        run: |
-          flutter --version
-          flutter doctor -v
+        run: flutter doctor -v
 
       - name: Generate Android project
-        shell: bash
         run: |
-          if [[ ! -f android/app/build.gradle.kts && ! -f android/app/build.gradle ]]; then
+          if [ ! -f android/app/build.gradle.kts ] && [ ! -f android/app/build.gradle ]; then
             flutter create \
               --platforms=android \
               --org com.vpnsopr \
@@ -103,6 +90,12 @@ jobs:
 
       - name: Configure Android
         run: python3 scripts/patch_android.py
+
+      - name: Fix dependency conflict
+        run: |
+          set -euo pipefail
+          sed -i 's/file_picker: \^10\.3\.3/file_picker: ^13.3.0/' pubspec.yaml
+          grep 'file_picker:' pubspec.yaml
 
       - name: Install dependencies
         run: flutter pub get
