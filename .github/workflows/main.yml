@@ -88,74 +88,7 @@ jobs:
       - name: Configure Android
         run: python3 scripts/patch_android.py
 
-      - name: Add JitPack repository
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          python3 - <<'PY'
-          from pathlib import Path
-          import re
-
-          candidates = [
-              Path("android/settings.gradle.kts"),
-              Path("android/settings.gradle")
-          ]
-
-          settings = next((p for p in candidates if p.exists()), None)
-
-          if settings is None:
-              raise SystemExit("Android settings.gradle not found")
-
-          content = settings.read_text(encoding="utf-8")
-
-          if "https://jitpack.io" in content:
-              print("JitPack already configured")
-          else:
-              start = content.find("dependencyResolutionManagement")
-
-              if start < 0:
-                  raise SystemExit(
-                      "dependencyResolutionManagement block not found"
-                  )
-
-              match = re.search(
-                  r"(?m)^(\s*)repositories\s*\{",
-                  content[start:]
-              )
-
-              if not match:
-                  raise SystemExit(
-                      "Dependency repositories block not found"
-                  )
-
-              position = start + match.end()
-              indent = match.group(1) + "    "
-
-              if settings.name.endswith(".kts"):
-                  repository = (
-                      '\n' + indent +
-                      'maven { url = uri("https://jitpack.io") }'
-                  )
-              else:
-                  repository = (
-                      '\n' + indent +
-                      "maven { url 'https://jitpack.io' }"
-                  )
-
-              content = (
-                  content[:position] +
-                  repository +
-                  content[position:]
-              )
-
-              settings.write_text(content, encoding="utf-8")
-              print("JitPack added to", settings)
-
-          print(settings.read_text(encoding="utf-8"))
-          PY
-
-      - name: Fix dependency version
+      - name: Fix FilePicker dependency
         run: |
           set -euo pipefail
           sed -i 's/file_picker: \^10\.3\.3/file_picker: ^13.3.0/' pubspec.yaml
@@ -171,9 +104,6 @@ jobs:
           import re
 
           root = Path("lib")
-
-          if not root.exists():
-              raise SystemExit("lib directory not found")
 
           for path in root.rglob("*.dart"):
               source = path.read_text(encoding="utf-8")
@@ -212,9 +142,7 @@ jobs:
               )
 
               if "FilePicker.platform." in source:
-                  raise SystemExit(
-                      f"Old FilePicker API remains: {path}"
-                  )
+                  raise SystemExit(f"Old FilePicker API: {path}")
 
               path.write_text(source, encoding="utf-8")
 
@@ -223,6 +151,76 @@ jobs:
 
       - name: Install dependencies
         run: flutter pub get
+
+      - name: Fix JitPack repositories
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          python3 - <<'PY'
+          from pathlib import Path
+
+          def add_jitpack(path):
+              if not path.exists():
+                  return False
+
+              content = path.read_text(encoding="utf-8")
+
+              if "https://jitpack.io" in content:
+                  print("Already configured:", path)
+                  return True
+
+              if path.name.endswith(".kts"):
+                  block = """
+          allprojects {
+              repositories {
+                  maven("https://jitpack.io")
+              }
+          }
+          """
+              else:
+                  block = """
+          allprojects {
+              repositories {
+                  maven { url 'https://jitpack.io' }
+              }
+          }
+          """
+
+              path.write_text(
+                  content.rstrip() + "\n\n" + block + "\n",
+                  encoding="utf-8"
+              )
+
+              print("JitPack added:", path)
+              return True
+
+          root = next(
+              (p for p in [
+                  Path("android/build.gradle.kts"),
+                  Path("android/build.gradle")
+              ] if p.exists()),
+              None
+          )
+
+          if root is None:
+              raise SystemExit("Android root build.gradle not found")
+
+          add_jitpack(root)
+
+          cache = Path.home() / ".pub-cache/hosted/pub.dev"
+
+          plugin_files = list(
+              cache.glob("flutter_sing_box-*/android/build.gradle.kts")
+          ) + list(
+              cache.glob("flutter_sing_box-*/android/build.gradle")
+          )
+
+          for plugin_file in plugin_files:
+              add_jitpack(plugin_file)
+
+          print("JitPack repository configuration completed")
+          PY
 
       - name: Generate launcher icon
         run: dart run flutter_launcher_icons
