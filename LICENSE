@@ -1,0 +1,9 @@
+SPDX-License-Identifier: GPL-3.0-only
+
+This project is intended to be distributed under the GNU General Public License v3.0 only.
+The project integrates the GPL-3.0 flutter_sing_box plugin and sing-box core.
+
+The complete license text is available at:
+https://www.gnu.org/licenses/gpl-3.0.txt
+
+Third-party license and source information is listed in THIRD_PARTY_NOTICES.md.

@@ -1,0 +1,36 @@
+name: vpnsopr
+description: TUN VPNSOPR - multi-protocol VPN client for Android
+publish_to: 'none'
+version: 1.0.0+1
+
+environment:
+  sdk: '>=3.12.0 <4.0.0'
+  flutter: '>=3.44.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+  flutter_localizations:
+    sdk: flutter
+  flutter_sing_box: ^3.0.3
+  mmkv: ^2.4.0
+  file_picker: ^10.3.3
+  mobile_scanner: ^7.1.2
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+  flutter_launcher_icons: ^0.14.4
+
+flutter:
+  uses-material-design: true
+  assets:
+    - assets/vpnsopr_logo.jpg
+    - assets/vpnsopr_icon.png
+
+flutter_launcher_icons:
+  android: true
+  image_path: assets/vpnsopr_icon.png
+  adaptive_icon_background: '#06142A'
+  adaptive_icon_foreground: assets/vpnsopr_icon.png
